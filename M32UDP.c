@@ -16,9 +16,9 @@
  * made in this package to keep or buffer data for deferred action or
  * transfers.
  */
-#include <stdlib.h>
+#include "M32.h"
+
 #include <string.h>
-#include <stdbool.h>
 #include <time.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -27,11 +27,14 @@
 #include <stdio.h>
 
 #define BSIZE 512 // MAX receive buffer size
+#define TIMEOUT 50 // default timeout
 
 #define round4(x) ((x) + 3) & ~0x3
 
 int X32Send(char *buffer, int length);
 int X32Recv(char *buffer, int timeout);
+
+int CONNECTION_STATE = 0;
 
 
 struct sockaddr_in Xip;
@@ -39,104 +42,8 @@ struct sockaddr* Xip_addr = (struct sockaddr *)&Xip;
 socklen_t Xip_len = sizeof(Xip); // length of addresses
 int Xfd; // X32 socket
 struct pollfd ufds;
-//
 int r_len, p_status; // length and status for receiving
-//
-//
 
-struct scribble_strip{
-	char name[13];
-	uint8_t icon; // 1-74
-	uint8_t color; // 0-15
-};
-
-struct config{
-	struct scribble_strip scribble;
-	uint8_t source; // 0-64
-};
-
-struct delay{
-	bool on;
-	float time;
-};
-
-struct preamp{
-	float trim;
-	bool invert;
-	bool hpon; // phantom or high pass?
-	uint8_t hpslope; // {12,18,24};
-	float hpf;
-};
-
-struct gate{
-	bool on;
-	uint8_t mode; // 0-4 {EXP2, EXP3, EXP4, GATE, DUCK}
-	float thr;
-	float range;
-	float attack;
-	float hold;
-	float release;
-	uint8_t keysrc; // 0-64
-	bool filter_on;
-	uint8_t filter_type; //0-8
-	float filter_f;
-};
-
-struct dyn{
-	bool on;
-	uint8_t mode; // {COMP, EXP}
-	uint8_t det; // {PEAK, RMS}
-	uint8_t env; // {LIN, LOG}
-	float thr;
-	uint8_t ratio; // 0-11 {1.1, 1.3, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10, 20, 100}
-	float knee;
-	float mgain;
-	float attack;
-	float hold;
-	float release;
-	uint8_t pos; // {PRE, POST}
-	uint8_t keysrc; // 0-64
-	float mix;
-	bool _auto;
-	bool filter_on;
-	uint8_t filter_type; // 0-8 {LC6, LC12, HC6, HC12, 1.0, 2.0, 3.0, 5.0, 10.0}
-	float filter_f;
-};
-
-struct insert{
-	bool on;
-	uint8_t pos; // {PRE, POST}
-	uint8_t sel; // 0-22 {OFF, FX1L, FX1R, FX2L, FX2R, FX3L, FX3R, FX4L, FX4R, FX5L, FX5R, FX6L, FX6R, FX7L, FX7R, FX8L, FX8R, AUX1, AUX2, AUX3, AUX4, AUX5, AUX6}
-};
-
-struct eq_band{
-	uint8_t type; // 0-5 {LCut, LShv, PEQ, VEQ, HShv, HCut}
-	float f;
-	float g;
-	float q; 
-};
-
-struct chan_eq{
-	struct eq_band band_1;
-	struct eq_band band_2;
-	struct eq_band band_3;
-	struct eq_band band_4;
-};
-
-struct mix{
-
-};
-
-struct channel{
-	struct config config;
-	struct delay delay;
-	struct preamp preamp;
-	struct gate gate;
-	struct dyn dyn;
-	struct insert insert;
-	bool eq_on;
-	struct chan_eq eq;
-};
 
 
 void printBuffer(char* buffer, int length){
@@ -158,6 +65,10 @@ void printBuffer(char* buffer, int length){
  * Returns null if there are no arguments or on malloc failure
 */
 char** parseArgs(char* buffer, int length){
+	if(buffer == NULL || length <= 0){
+		return NULL;
+	}
+
 	printf("\t%s\n", buffer);
 	// have to look through manually cause string has nulls. ew.
 	char* comma = NULL;
@@ -167,6 +78,7 @@ char** parseArgs(char* buffer, int length){
 			break;
 		}
 	}
+
 	if(comma == NULL){
 		return NULL;
 	}
@@ -329,7 +241,7 @@ int generateAndSendMessage(char* address){
 int getIntValue(char* address){
 	if(generateAndSendMessage(address)){
 		char r_buf[BSIZE];
-		r_len = X32Recv(r_buf, 100);
+		r_len = X32Recv(r_buf, TIMEOUT);
 		char **results = parseArgs(r_buf, r_len);
 		if(results == NULL){
 			return -1;
@@ -371,7 +283,7 @@ int sendIntValue(char *address, int value){
 float getFloatValue(char* address){
 	if(generateAndSendMessage(address)){
 		char r_buf[BSIZE];
-		r_len = X32Recv(r_buf, 100);
+		r_len = X32Recv(r_buf, TIMEOUT);
 		char **results = parseArgs(r_buf, r_len);
 		if(results == NULL){
 			return -1;
@@ -389,7 +301,7 @@ float getFloatValue(char* address){
 /**
  * Generates a message to send to the M32 with one float argument
  * address: string representing the node to send the command to
- * int: host order float to send as argument
+ * float: host order float to send as argument
  * 
  * Returns response from generateAndSendMessageWithArgs.
 */
@@ -413,7 +325,7 @@ int sendFloatValue(char *address, float value){
 char *getStringValue(char* address){
 	if(generateAndSendMessage(address)){
 		char r_buf[BSIZE];
-		r_len = X32Recv(r_buf, 100);
+		r_len = X32Recv(r_buf, TIMEOUT);
 		char **results = parseArgs(r_buf, r_len);
 		if(results == NULL){
 			return NULL;
@@ -427,6 +339,23 @@ char *getStringValue(char* address){
 	return NULL;
 }
 
+/**
+ * Generates a message to send to the M32 with one string argument
+ * address: string representing the node to send the command to
+ * string: null terminated string to send as argument
+ * 
+ * Returns response from generateAndSendMessageWithArgs.
+*/
+int sendStringValue(char *address, char *value){
+	char* arg1 = value;
+	char** args = malloc(1*sizeof(char*));
+	args[0] = (char *) &arg1;
+
+	int res = generateAndSendMessageWithArgs(address, "s", args);
+	free(args);
+	return res;
+}
+
 int getChannelName(int ch, char* r_buf){
 	if(ch < 1 || ch > 32){
 		return -1;
@@ -438,7 +367,7 @@ int getChannelName(int ch, char* r_buf){
 		return -1;
 	}
 
-	int r_len = X32Recv(r_buf, 100);
+	int r_len = X32Recv(r_buf, TIMEOUT);
 	return r_len;
 }
 
@@ -453,7 +382,7 @@ int getChannelEq(int ch, int band, char* r_buf){
 		return -1;
 	}
 
-	int r_len = X32Recv(r_buf, 100);
+	int r_len = X32Recv(r_buf, TIMEOUT);
 	return r_len;
 }
 
@@ -546,7 +475,7 @@ int copyChannelConfig(int chsrc, int chdst){
 		return -1;
 	}
 
-	int r_len = X32Recv(r_buf, 100);
+	int r_len = X32Recv(r_buf, TIMEOUT);
 	char **results = parseArgs(r_buf, r_len);
 	if(results == NULL){
 		return -1;
@@ -565,7 +494,7 @@ int copyChannelConfig(int chsrc, int chdst){
 		return -1;
 	}
 
-	r_len = X32Recv(r_buf, 100);
+	r_len = X32Recv(r_buf, TIMEOUT);
 	results = parseArgs(r_buf, r_len);
 	if(results == NULL){
 		return -1;
@@ -587,7 +516,7 @@ int copyChannelConfig(int chsrc, int chdst){
 		return -1;
 	}
 
-	r_len = X32Recv(r_buf, 100);
+	r_len = X32Recv(r_buf, TIMEOUT);
 	results = parseArgs(r_buf, r_len);
 	if(results == NULL){
 		return -1;
@@ -623,6 +552,7 @@ int X32Connect(char *ip_str, int port) {
     
     // Create UDP socket
     if ((Xfd = socket (PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+		CONNECTION_STATE = 0;
         return -2; // An error occurred on socket creation
     }
 
@@ -638,17 +568,21 @@ int X32Connect(char *ip_str, int port) {
     //
     // Validate connection by sending a /info command
     if (sendto (Xfd, Info, 8, 0, Xip_addr, Xip_len) < 0) {
+		CONNECTION_STATE = 0;
         return (-3);
     }
     if ((p_status = poll (&ufds, 1, 100)) > 0) { // X32 sent something?
         r_len = recvfrom(Xfd, r_buf, 128, 0, 0, 0); // Get answer and
         if ((strncmp(r_buf, Info, 5)) == 0) { // test data (5 bytes)
+			CONNECTION_STATE = 1;
             return 1; // Connected
         }
     } else if (p_status < 0) {
+		CONNECTION_STATE = 0;
         return -1; // Error on polling (not connected)
     }
     // Not connected on timeout
+	CONNECTION_STATE = 0;
     return 0;
 }
 
@@ -774,15 +708,14 @@ int main() {
 
 	char c_buf[] = "/ch/01/config/name\0";
 
-	status = X32Connect("192.168.0.101", 10023);
-	//status = X32Connect("127.0.0.1", 12345);
+	//status = X32Connect("192.168.0.101", 10023);
+	status = X32Connect("10.139.81.1", 10023);
 	printf ("Connection status: %d\n", status);
-	status = 1;
 
 	if (status) {
 		s_len = X32Send(s_buf, 8);
 		if (s_len) {
-			r_len = X32Recv(r_buf, 10);
+			r_len = X32Recv(r_buf, TIMEOUT);
 		}
 
 		struct channel *channel = getChannelInfo(1);
@@ -812,7 +745,7 @@ int main() {
 
 		s_len = generateAndSendMessage(c_buf);
 		if (s_len) {
-			r_len = X32Recv(r_buf, 100);
+			r_len = X32Recv(r_buf, TIMEOUT);
 			printBuffer(r_buf,r_len);
 		}
 
