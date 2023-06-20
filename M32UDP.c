@@ -45,6 +45,196 @@ struct pollfd ufds;
 int r_len, p_status; // length and status for receiving
 
 
+/*
+
+I want to associate a number with each node, to make selection of what to sync easier.
+Probably best to index on each part of the slash, since some are explicitly numbered
+0	config
+	0	chlink
+		[1-2, ..., 31-32]
+	1	auxlink
+		[1-2, ..., 7-8]
+	2	fxlink
+		[1-2, ..., 7-8]
+	3	buslink
+		[1-2, ..., 15-16]
+	4	mtxlink
+		[1-2, 3-4, 5-6]
+	5	mute
+		[1, ..., 6]
+	6	linkcfg
+		[hadly, eq, dyn, fdrmute]
+	7	mono
+		[mode, link]
+	8	solo
+	9	talk
+	10	osc
+	11	routing
+		IN
+			[1-8, ..., 25-32, AUX]
+		AES50A
+			[1-8, ..., 41-48]
+		AES50B
+			[1-8, ..., 41-48]
+		CARD
+			[1-8, ..., 25-32]
+		OUT
+			[1-4,...13-16]
+	12	userctrl
+		[A, B, C]
+			color
+			enc
+				[1, ..., 4]
+			btn
+				[5, ..., 12]
+	13	tape
+		[gainL, gainR, autoplay]
+
+0	ch
+*/
+
+typedef struct osc_node{
+	char *label;
+	int no_children;
+	const struct osc_node *children;
+} osc_node_t;
+
+
+// Array of leafs which are sets of 8 numbers (1-8,9-16,etc)
+// used in routing config
+//      !!!!!!!!!!!! TODO NOT USED FOR IN cause it needs AUX
+const osc_node_t eight_nums[] =
+    {
+        {"1-8",0,NULL},{"9-16",0,NULL},{"17-24",0,NULL},{"25-32",0,NULL},{"33-40",0,NULL},{"41-48",0,NULL}
+    };
+
+// Array of leafs which are sets of 4 numbers (1-4,5-8,etc)
+// used in OUT config
+const osc_node_t four_nums[] =
+    {
+        {"1-4",0,NULL},{"5-8",0,NULL},{"9-12",0,NULL},{"13-16",0,NULL}
+    };
+
+// Array of leafs which are 'linked' numbers (odd-even pairs up to 31-32)
+// used in chlink, auxlink,buslink,mtxlink
+const osc_node_t linked_nums[] =
+    {
+        {"1-2",0,NULL},{"3-4",0,NULL},{"5-6",0,NULL},{"7-8",0,NULL},{"9-10",0,NULL},{"11-12",0,NULL},{"13-14",0,NULL},{"15-16",0,NULL},
+		{"17-18",0,NULL},{"19-20",0,NULL},{"21-22",0,NULL},{"23-24",0,NULL},{"25-26",0,NULL},{"27-28",0,NULL},{"29-30",0,NULL},{"31-32",0,NULL}
+    };
+
+// Array of leafs which are single numbers
+// used in mutegroups,selection of channl/bus/aux/fx/etc.., and userctrl encoder/buttons
+const osc_node_t single_nums[] =
+    {
+        {"1",0,NULL},{"2",0,NULL},{"3",0,NULL},{"4",0,NULL},{"5",0,NULL},{"6",0,NULL},
+		{"7",0,NULL},{"8",0,NULL},{"9",0,NULL},{"10",0,NULL},{"11",0,NULL},{"12",0,NULL}
+    };
+
+// Array of leafs for config/linkcfg
+const osc_node_t config_linkcfg[] =
+    {
+		{"hadly",0,NULL}, {"eq",0,NULL}, {"dyn",0,NULL}, {"fdrmute",0,NULL}
+	};
+
+// Array of leafs for config/mono
+const osc_node_t config_mono[] =
+    {
+		{"mode",0,NULL}, {"link",0,NULL}
+	};
+
+// Array of leafs for config/solo
+const osc_node_t config_solo[] =
+    {
+		{"level",0,NULL}, {"source",0,NULL}, {"sourcetrim",0,NULL}, {"chmode",0,NULL}, {"busmode",0,NULL}, {"dcamode",0,NULL}, {"exclusive",0,NULL}, {"followsel",0,NULL}, {"followsolo",0,NULL},
+		{"dimatt",0,NULL}, {"dim",0,NULL}, {"mono",0,NULL}, {"delay",0,NULL}, {"delaytime",0,NULL}, {"masterctrl",0,NULL}, {"mute",0,NULL}, {"dimpfl",0,NULL}
+	};
+
+// Array of leafs for config/talk/{A/B}
+const osc_node_t config_talk_AB[] =
+    {
+		{"level",0,NULL}, {"dim",0,NULL}, {"latch",0,NULL}, {"destmap",0,NULL}
+	};
+
+// Array of leafs for config/talk
+const osc_node_t config_talk[] =
+    {
+		{"enable",0,NULL}, {"source",0,NULL}, {"A",4,config_talk_AB},{"B",4,config_talk_AB}
+	};
+
+// Array of leafs for config/osc
+const osc_node_t config_osc[] =
+    {
+		{"level",0,NULL}, {"f1",0,NULL}, {"f2",0,NULL}, {"fsel",0,NULL}, {"type",0,NULL}, {"dest",0,NULL}
+	};
+
+// Array of leafs for config/routing/IN
+const osc_node_t config_routing_IN[] =
+    {
+		{"1-8",0,NULL},{"9-16",0,NULL},{"17-24",0,NULL},{"25-32",0,NULL},{"AUX",0,NULL}
+	};
+
+// Array of leafs for config/routing
+const osc_node_t config_routing[] =
+    {
+		{"IN",5,config_routing_IN}, {"AES50A",6,eight_nums}, {"AES50B",6,eight_nums}, {"CARD",4,eight_nums}, {"OUT",4,four_nums}
+	};
+
+// Array of leafs for config/usrctrl{A/B/C}
+const osc_node_t config_userctrl_ABC[] =
+    {
+		{"color",0,NULL},{"enc",4,single_nums},{"btn",8,single_nums+4}
+	};
+
+// Array of leafs for config/userctrl
+const osc_node_t config_userctrl[] =
+    {
+		{"A",3,config_userctrl_ABC},{"B",3,config_userctrl_ABC},{"C",3,config_userctrl_ABC}
+	};
+
+// Array of leafs for config/tape
+const osc_node_t config_tape[] =
+    {
+		{"gainL",0,NULL},{"gainR",0,NULL},{"autoplay",0,NULL}
+	};
+
+const osc_node_t config[] =
+	{
+		{"chlink", 16, linked_nums},
+		{"auxlink", 4, linked_nums},
+		{"fxlink", 4, linked_nums},
+		{"buslink", 8, linked_nums},
+		{"mtxlink", 3, linked_nums},
+		{"mute", 6, single_nums},
+		{"linkcfg", 4, config_linkcfg},
+		{"mono", 2, config_mono},
+		{"solo", 17, config_solo},
+		{"talk", 4, config_talk},
+		{"osc", 6, config_osc},
+		{"routing", 5, config_routing},
+		{"usrctrl", 3, config_userctrl},
+		{"tape", 3, config_tape}
+	};
+
+const osc_node_t top = {
+	"config",
+	14,
+	config
+};
+
+void walkTree(char *string, int offset, const osc_node_t *node){
+	int add = strlen(node->label) + 1;
+	snprintf(string+offset, add+2, "/%s", node->label);
+	
+	if(node->no_children == 0){
+		printf("%s\n", string);
+	}
+
+	for(int i = 0; i < node->no_children; i++){
+		walkTree(string, offset + add, node->children + i);
+	}
+}
+
 
 void printBuffer(char* buffer, int length){
 	int i = 0;
@@ -698,6 +888,7 @@ int X32Recv(char *buffer, int timeout) {
 // Test purpose only - comment when linking the package to an application
 //
 int main() {
+
 	//Search(10023);
 
 	char r_buf[512];
@@ -752,6 +943,7 @@ int main() {
 		// copyChannelConfig(1,5);
 	}
 
+	walkTree(r_buf, 0, &top);
 
 
 	printf("\n");
